@@ -32,9 +32,6 @@ int main() {
         printf("Failed creating database structure\n");
         return -1;
     }
-    // ic_influx_database("127.0.0.1", 8086, "interface_data_test");
-    // ic_debug(0);
-    // ic_tags("interface_data_test=junos");
 
     for(;;) { // Enter an endless loop reading packets from the UDP stream
         i_count = 0;
@@ -65,7 +62,6 @@ int main() {
         ifdb_set_tags(db, "interface_data_test=junos");
         ifdb_start_measurement(db, hdr.system_id);
         for(int i = 0; i < i_count-1; i++) {
-            // dump_interface_info(&interfaces[i]);
             if(strlen(interfaces[i].name) < 2048) {
                 snprintf(in_if_packets, 4096, "%s:if_packets_ingress", interfaces[i].name);
             }
