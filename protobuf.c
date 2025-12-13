@@ -258,12 +258,7 @@ int proto_interfaces(struct thread_container *tc)
     fflush(stdout);
     struct interfaces interfaces[255] = {0};
     int i_count = 0;
-    printf("Processing gnmi header\n");
     process_junos_gnmi_header(&tc->cont, &tc->hdr);
-    printf("Completed\n");
-    fflush(stdout);
-    printf("TC recurse points is set to %llu\n",tc->recurse_depth);
-    printf("Calling recursion\n");
     recurse_by_msg_num(&tc->cont, tc->recurse_array, 0, tc->recurse_depth);
     const u_char *end = tc->cont.ptr + tc->cont.remaining_length;
     while (tc->cont.ptr < end) {
@@ -284,7 +279,6 @@ int proto_interfaces(struct thread_container *tc)
         return -1;
     }
     for (int i = 0; i < i_count - 1; i++) {
-        dump_interface_info(&interfaces[i]);
         if (strlen(interfaces[i].name) < 2048) {
             snprintf(in_if_packets, 4096, "%s:if_packets_ingress", interfaces[i].name);
         }
@@ -298,10 +292,11 @@ int proto_interfaces(struct thread_container *tc)
     }
     time_t epoch = tc->hdr.timestamp / 1000;
     struct tm *timeinfo = localtime(&epoch);
-    char time_buf[80];
-    strftime(time_buf, 80, "%Y-%m-%d %H:%M:%S", timeinfo);
     ifdb_end_measurement(tc->db, tc->hdr.timestamp * 1000000);
     ifdb_push(tc->db);
+    char time_buf[80];
+    strftime(time_buf, 80, "%Y-%m-%d %H:%M:%S", timeinfo);
+    printf("Completed push at %s\n", time_buf);
     return 0;
 }
 
@@ -357,8 +352,6 @@ void recurse_by_msg_num(struct container *cont, __u64 recurse_array[], int array
     while(cont->ptr < end && array_point < recurse_len) {
         __u64 msg_num;
         cont->ptr = get_var_numeric(cont->ptr, &msg_num);
-        printf("Looking for recurse point %llu, have recurse point %llu\n", recurse_array[array_point], msg_num>>3);
-        fflush(stdout);
         if(msg_num>>3 == recurse_array[array_point]) {
             cont->last_msg = msg_num;
             cont->remaining_length = end-cont->ptr;
