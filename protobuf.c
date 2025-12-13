@@ -2,6 +2,20 @@
 // Created by andrew on 12/10/25.
 //
 
+#include <stdio.h>
+#include <strings.h>
+#include <pcap.h>
+#include <asm-generic/types.h>
+#include <linux/ip.h>
+#include <linux/udp.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <locale.h>
+#include <stdbool.h>
+#include <unistd.h>
+#include <pthread.h>
+#include "influx.h"
 #include "protobuf.h"
 
 /* reverse_array_10 is just a basic inline function to reverse an array of 10 bytes
@@ -87,7 +101,6 @@ void process_junos_gnmi_header(struct container *cont, struct gnmi_header *hdr) 
                 cont->ptr = get_var_numeric(cont->ptr, &hdr->sub_component_id);
                 break;
             case 4:
-                printf("Got path case\n");
                 cont->ptr = get_string(cont->ptr, hdr->path, 1024);
                 break;
             case 5: // Sequence number
@@ -206,6 +219,134 @@ void dump_interface_info(struct interfaces *iface) {
     printf("\tEgress Packets: %llu\n", iface->egress.if_packets);
 }
 
+struct thread_container *create_listener(char *addr, __u16 port, callback cb)
+{
+    struct thread_container *tc = calloc(1, sizeof(struct thread_container));
+    if(!tc) {
+        printf("Failed allocating for listener thread structure\n");
+        return NULL;
+    }
+    printf("Allocated for thread container\n");
+    fflush(stdout);
+    if(addr != NULL) {
+        printf("Got address at %p\n", addr);
+        fflush(stdout);
+        if((inet_pton(AF_INET, addr, &tc->server_addr.sin_addr)) != 1) {
+            printf("Invalid server address specified, listening on all addresses\n");
+            tc->server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        }
+    } else {
+        tc->server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    }
+    fflush(stdout);
+    tc->server_addr.sin_port = htons(port);
+    tc->server_addr.sin_family = AF_INET;
+    tc->cb = cb;
+    return tc;
+}
+
+int proto_add_recurse(struct thread_container *listener, __u64 cp) {
+    if(listener->recurse_depth < 49) {
+        listener->recurse_array[listener->recurse_depth++] = cp;
+        return 0;
+    }
+    return -1;
+}
+
+int proto_interfaces(struct thread_container *tc)
+{
+    fflush(stdout);
+    struct interfaces interfaces[255] = {0};
+    int i_count = 0;
+    printf("Processing gnmi header\n");
+    process_junos_gnmi_header(&tc->cont, &tc->hdr);
+    printf("Completed\n");
+    fflush(stdout);
+    printf("TC recurse points is set to %llu\n",tc->recurse_depth);
+    printf("Calling recursion\n");
+    recurse_by_msg_num(&tc->cont, tc->recurse_array, 0, tc->recurse_depth);
+    const u_char *end = tc->cont.ptr + tc->cont.remaining_length;
+    while (tc->cont.ptr < end) {
+        process_junos_interface(&tc->cont, &interfaces[i_count++]);
+    }
+    char in_if_packets[4096];
+    char in_if_octets[2048];
+    char out_if_packets[2048];
+    char out_if_octets[2048];
+    ifdb_set_tags(tc->db, "interface_data_test=junos");
+    ifdb_start_measurement(tc->db, tc->hdr.system_id);
+    tc->cont.remaining_length = tc->receive_len;
+    tc->cont.ptr = tc->read_buffer;
+    process_junos_gnmi_header(&tc->cont, &tc->hdr);
+    if (tc->cont.error) {
+        snprintf(tc->error, 2048, "Failed processing GNMI Header\n");
+        tc->shutdown = true;
+        return -1;
+    }
+    for (int i = 0; i < i_count - 1; i++) {
+        dump_interface_info(&interfaces[i]);
+        if (strlen(interfaces[i].name) < 2048) {
+            snprintf(in_if_packets, 4096, "%s:if_packets_ingress", interfaces[i].name);
+        }
+        snprintf(in_if_octets, 2048, "%s:if_octets_ingress", interfaces[i].name);
+        snprintf(out_if_packets, 2048, "%s:if_packets_egress", interfaces[i].name);
+        snprintf(out_if_octets, 2048, "%s:if_octets_egress", interfaces[i].name);
+        ifdb_add_long(tc->db, in_if_packets, interfaces[i].ingress.if_packets);
+        ifdb_add_long(tc->db, in_if_octets, interfaces[i].ingress.if_octets * 8);
+        ifdb_add_long(tc->db, out_if_packets, interfaces[i].egress.if_packets);
+        ifdb_add_long(tc->db, out_if_octets, interfaces[i].egress.if_octets * 8);
+    }
+    time_t epoch = tc->hdr.timestamp / 1000;
+    struct tm *timeinfo = localtime(&epoch);
+    char time_buf[80];
+    strftime(time_buf, 80, "%Y-%m-%d %H:%M:%S", timeinfo);
+    ifdb_end_measurement(tc->db, tc->hdr.timestamp * 1000000);
+    ifdb_push(tc->db);
+    return 0;
+}
+
+void *proto_listen(void *thread_container)
+{
+    struct thread_container *tc = thread_container;
+    struct ifdb *db = tc->db;
+    int receive_len = 0;
+    char time_buf[80];
+    int i_count = 0;
+    if(!db) {
+        pthread_exit(NULL);
+    }
+    if((tc->socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        snprintf(tc->error, 2048, "Failed creating socket\n");
+        tc->shutdown = true;
+        pthread_exit(NULL);
+    }
+    if(bind(tc->socket, (struct sockaddr *)&tc->server_addr, sizeof(struct sockaddr_in)) < 0) {
+        snprintf(tc->error, 2048, "Failed binding socket\n");
+        tc->shutdown = true;
+        pthread_exit(NULL);
+    }
+    while(!tc->shutdown) { // Enter an endless loop reading packets from the UDP stream
+        i_count = 0;
+        tc->receive_len = recvfrom(tc->socket, tc->read_buffer, (1024*1024)-1, 0, NULL, 0);
+        fflush(stdout);
+        if (tc->receive_len < 0) {
+            snprintf(tc->error, 2048, "Failed receiving data from socket\n");
+            close(tc->socket);
+            tc->shutdown = true;
+            pthread_exit(NULL);
+        }
+        tc->cont.ptr = tc->read_buffer;
+        tc->cont.remaining_length = tc->receive_len;
+        if(tc->cb(tc) != 0) {
+            snprintf(tc->error, 2048, "Failed processing data\n");
+            tc->shutdown = NULL;
+            pthread_exit(NULL);
+        }
+    }
+    snprintf(tc->error, 2048, "Thread exit due to shutdown\n");
+    pthread_exit(NULL);
+}
+
 void recurse_by_msg_num(struct container *cont, __u64 recurse_array[], int array_point, int recurse_len) {
     __u64 msg_length;
     const u_char *end = cont->ptr+cont->remaining_length;
@@ -216,6 +357,8 @@ void recurse_by_msg_num(struct container *cont, __u64 recurse_array[], int array
     while(cont->ptr < end && array_point < recurse_len) {
         __u64 msg_num;
         cont->ptr = get_var_numeric(cont->ptr, &msg_num);
+        printf("Looking for recurse point %llu, have recurse point %llu\n", recurse_array[array_point], msg_num>>3);
+        fflush(stdout);
         if(msg_num>>3 == recurse_array[array_point]) {
             cont->last_msg = msg_num;
             cont->remaining_length = end-cont->ptr;

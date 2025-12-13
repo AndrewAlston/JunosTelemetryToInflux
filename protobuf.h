@@ -17,8 +17,12 @@
 #include <locale.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #define TELEMETRY_PORT 2301
+
+struct thread_container;
+typedef int(*callback)(struct thread_container *tc);
 
 struct container {
     __u64 last_msg; // The encoded last message / message type we received
@@ -56,10 +60,34 @@ struct gnmi_header {
     __u64 version_minor;
 };
 
+struct thread_container {
+    struct gnmi_header hdr;
+    struct sockaddr_in server_addr;
+    struct container cont;
+    struct interfaces interfaces[50];
+    char listen_addr[INET_ADDRSTRLEN];
+    __u16 listen_port;
+    int socket;
+    __u64 recurse_array[50]; // Probably way bigger than we need
+    __u64 recurse_depth;
+    pthread_t thread;
+    callback cb;
+    bool shutdown;
+    struct ifdb *db;
+    char error[2048];
+    u_char read_buffer[1024*1024];
+    unsigned long receive_len;
+};
+
+
 void process_junos_gnmi_header(struct container *cont, struct gnmi_header *hdr);
 void dump_gnmi_header(struct gnmi_header *hdr);
 void recurse_by_msg_num(struct container *cont, __u64 recurse_array[], int array_point, int recurse_len);
 const u_char *get_var_numeric(const u_char *payload, __u64 *output);
 const u_char *process_junos_interface(struct container *cont, struct interfaces *iface);
 void dump_interface_info(struct interfaces *iface);
+struct thread_container *create_listener(char *addr, __u16 port, callback cb);
+int proto_add_recurse(struct thread_container *listener, __u64 cp);
+int proto_interfaces(struct thread_container *tc);
+void *proto_listen(void *thread_container);
 #endif //PROTOBUF2_PROTOBUF_H

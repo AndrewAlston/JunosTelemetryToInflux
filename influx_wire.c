@@ -123,6 +123,7 @@ void ifdb_push(struct ifdb *db)
         sscanf(db->result, "HTTP/1.1 %d", &code);
         if(code != 204) {
             printf("Failed post, got error return code %d\n", code);
+            printf("Attempted to post %s\n", db->buffer);
         }
     }
 cleanup:
