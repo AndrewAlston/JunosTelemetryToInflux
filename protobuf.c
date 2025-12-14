@@ -18,6 +18,24 @@
 #include "influx.h"
 #include "protobuf.h"
 
+void dump_buffer(void *buffer,__u16 size)
+{
+    char ret_print[18];
+    void *cur_pkt = buffer;
+    printf ("%06x\t",0);
+    fflush (stdout);
+    for(int p = 0; p < size; p++)
+    {
+        if((p + 1) % 16 == 0)
+            snprintf (ret_print,10,"\n%06x\t",p + 1);
+        printf ("%02x%s",*(uint8_t *) (cur_pkt + p),
+                ((p + 1) % 16 == 0)?ret_print:" ");
+        fflush (stdout);
+    }
+    printf ("\n\n");
+    fflush (stdout);
+}
+
 /* reverse_array_10 is just a basic inline function to reverse an array of 10 bytes
 * in order to create a big endian array of 7 bit integers that can be concatenated
 */
@@ -55,6 +73,16 @@ static __u64 get_var_int(const u_char *data, __u64 *var_int) {
     return bc;
 }
 
+static const u_char *get_double(const u_char *data, void *output) {
+    memcpy(output, data, 8);
+    return &data[8];
+}
+
+static const u_char *get_float(const u_char *data, void *output) {
+    memcpy(output, data, 4);
+    return &data[4];
+}
+
 static const u_char *get_string(const u_char *payload, char *output, int max_len)
 {
     __u64 var_int = 0;
@@ -71,6 +99,18 @@ const u_char *get_var_numeric(const u_char *payload, __u64 *output)
 {
     __u64 bc = get_var_int(payload, output);
     return &payload[bc];
+}
+
+const u_char *get_boolean(const u_char *payload, bool *output)
+{
+    __u64 boolean;
+    const u_char *ret = get_var_numeric(payload, &boolean);
+    if(boolean) {
+        *output = true;
+    } else {
+        *output = false;
+    }
+    return ret;
 }
 
 void dump_gnmi_header(struct gnmi_header *hdr) {
@@ -211,6 +251,206 @@ const u_char *process_junos_interface(struct container *cont, struct interfaces 
     return cont->ptr;
 }
 
+const u_char *process_optic_lane_stats(struct container *cont, const u_char *end, struct optic_lanes *lane) {
+    while(cont->ptr < end) {
+        cont->ptr = get_var_numeric(cont->ptr, &cont->last_msg);
+        switch(cont->last_msg>>3) {
+            case 1:
+                cont->ptr = get_var_numeric(cont->ptr, &lane->lane_number);
+                break;
+            case 2:
+                cont->ptr = get_double(cont->ptr, &lane->laser_temp);
+                break;
+            case 3:
+                cont->ptr = get_float(cont->ptr, &lane->laser_output_dbm);
+                break;
+            case 4:
+                cont->ptr = get_float(cont->ptr, &lane->laser_receive_dbm);
+                break;
+            case 5:
+                cont->ptr = get_double(cont->ptr, &lane->laser_bias_current);
+                break;
+            case 6:
+                cont->ptr = get_boolean(cont->ptr, &lane->laser_output_high_alarm);
+                break;
+            case 7:
+                cont->ptr = get_boolean(cont->ptr, &lane->laser_output_low_alarm);
+                break;
+            case 8:
+                cont->ptr = get_boolean(cont->ptr, &lane->laser_output_high_warning);
+                break;
+            case 9:
+                cont->ptr = get_boolean(cont->ptr, &lane->laser_output_low_warning);
+                break;
+            case 10:
+                cont->ptr = get_boolean(cont->ptr, &lane->laser_receive_high_alarm);
+                break;
+            case 11:
+                cont->ptr = get_boolean(cont->ptr, &lane->laser_receive_low_alarm);
+                break;
+            case 12:
+                cont->ptr = get_boolean(cont->ptr, &lane->laser_receive_high_warning);
+                break;
+            case 13:
+                cont->ptr = get_boolean(cont->ptr, &lane->laser_receive_low_warning);
+                break;
+            case 14:
+                cont->ptr = get_boolean(cont->ptr, &lane->laser_bias_high_alarm);
+                break;
+            case 15:
+                cont->ptr = get_boolean(cont->ptr, &lane->laser_bias_low_alarm);
+                break;
+            case 16:
+                cont->ptr = get_boolean(cont->ptr, &lane->laser_bias_high_warning);
+                break;
+            case 17:
+                cont->ptr = get_boolean(cont->ptr, &lane->laser_bias_low_warning);
+                break;
+            case 18:
+                cont->ptr = get_boolean(cont->ptr, &lane->laser_tx_los_alarm);
+                break;
+            case 19:
+                cont->ptr = get_boolean(cont->ptr, &lane->laser_rx_los_alarm);
+                break;
+            case 20:
+                cont->ptr = get_var_numeric(cont->ptr, &lane->fec_corrected_bits);
+                break;
+            case 21:
+                cont->ptr = get_var_numeric(cont->ptr, &lane->fec_uncorrected_bits);
+                break;
+            default:
+                return end;
+        }
+    }
+    return cont->ptr;
+}
+
+
+
+const u_char *process_optic_stats(struct container *cont, struct optic_stats *stats)
+{
+    __u64 int_msg = 0;
+    __u64 msg_len = 0;
+    __u64 boolean;
+    const u_char *lane_end = NULL;
+    int lane_count = 0;
+    cont->ptr = get_var_numeric(cont->ptr, &msg_len);
+    const u_char *end = cont->ptr + msg_len;
+    cont->ptr = get_var_numeric(cont->ptr, &int_msg);
+    cont->ptr = get_var_numeric(cont->ptr, &msg_len);
+    while(cont->ptr < end) {
+        cont->ptr = get_var_numeric(cont->ptr, &cont->last_msg);
+        switch(cont->last_msg>>3) {
+            case 1:
+                cont->ptr = get_var_numeric(cont->ptr, &stats->optic_type);
+                break;
+            case 2:
+                cont->ptr = get_double(cont->ptr, &stats->module_temp);
+                break;
+            case 3:
+                cont->ptr = get_double(cont->ptr, &stats->temp_high_alarm_thresh);
+                break;
+            case 4:
+                cont->ptr = get_double(cont->ptr, &stats->temp_low_alarm_thresh);
+                break;
+            case 5:
+                cont->ptr = get_double(cont->ptr, &stats->temp_high_warning_thresh);
+                break;
+            case 6:
+                cont->ptr = get_double(cont->ptr, &stats->temp_low_warning_thresh);
+                break;
+            case 7:
+                cont->ptr = get_double(cont->ptr, &stats->laser_output_high_alarm_thresh);
+                break;
+            case 8:
+                cont->ptr = get_double(cont->ptr, &stats->laser_output_low_alarm_thresh);
+                break;
+            case 9:
+                cont->ptr = get_double(cont->ptr, &stats->laser_output_high_warning_thresh);
+                break;
+            case 10:
+                cont->ptr = get_double(cont->ptr, &stats->laser_output_low_warning_thresh);
+                break;
+            case 11:
+                cont->ptr = get_double(cont->ptr, &stats->laser_rx_high_alarm_thresh);
+                break;
+            case 12:
+                cont->ptr = get_double(cont->ptr, &stats->laser_rx_low_alarm_thresh);
+                break;
+            case 13:
+                cont->ptr = get_double(cont->ptr, &stats->laser_rx_high_warning_thresh);
+                break;
+            case 14:
+                cont->ptr = get_double(cont->ptr, &stats->laser_rx_low_warning_thresh);
+                break;
+            case 15:
+                cont->ptr = get_double(cont->ptr, &stats->laser_bias_high_alarm_thresh);
+                break;
+            case 16:
+                cont->ptr = get_double(cont->ptr, &stats->laser_bias_low_alarm_thresh);
+                break;
+            case 17:
+                cont->ptr = get_double(cont->ptr, &stats->laser_bias_high_warning_thresh);
+                break;
+            case 18:
+                cont->ptr = get_double(cont->ptr, &stats->laser_bias_low_warning_thresh);
+                break;
+            case 19:
+                cont->ptr = get_boolean(cont->ptr, &stats->temp_high_alarm);
+                break;
+            case 20:
+                cont->ptr = get_boolean(cont->ptr, &stats->temp_low_alarm);
+                break;
+            case 21:
+                cont->ptr = get_boolean(cont->ptr, &stats->temp_high_warning);
+                break;
+            case 22:
+                cont->ptr = get_boolean(cont->ptr, &stats->temp_low_warning);
+                break;
+            case 23:
+                cont->ptr = get_var_numeric(cont->ptr, &msg_len);
+                lane_end = cont->ptr+msg_len;
+                while((cont->ptr < lane_end) && (lane_count < 8)) {
+                    cont->ptr = process_optic_lane_stats(cont, lane_end, &stats->lanes[lane_count++]);
+                }
+                stats->num_lanes = lane_count;
+                break;
+            default:
+                printf("Something went wrong, got message %llu\n", cont->last_msg>>3);
+                return NULL;
+        }
+    }
+    return end;
+}
+
+const u_char *process_junos_optics(struct container *cont, struct optics *optic)
+{
+    __u64 int_msg = 0;
+    __u64 msg_len = 0;
+    cont->ptr = get_var_numeric(cont->ptr, &int_msg);
+    cont->ptr = get_var_numeric(cont->ptr, &msg_len);
+    const u_char *end = cont->ptr + msg_len;
+    while(cont->ptr < end) {
+        cont->ptr = get_var_numeric(cont->ptr, &cont->last_msg);
+        switch(cont->last_msg>>3) {
+            case 1:
+                cont->ptr = get_string(cont->ptr, optic->name, 1024);
+                cont->remaining_length = end-cont->ptr;
+                break;
+            case 2:
+                cont->ptr = get_var_numeric(cont->ptr, &optic->snmp_if_index);
+                break;
+            case 3:
+                cont->ptr = process_optic_stats(cont, &optic->stats);
+                break;
+            default:
+                printf("Got unknown code point\n");
+                return NULL;
+        }
+    }
+    return cont->ptr;
+}
+
 void dump_interface_info(struct interfaces *iface) {
     printf("Interface name: %s\n", iface->name);
     printf("\tIngress Octets: %llu\n", iface->ingress.if_octets);
@@ -255,7 +495,6 @@ int proto_add_recurse(struct thread_container *listener, __u64 cp) {
 
 int proto_interfaces(struct thread_container *tc)
 {
-    fflush(stdout);
     struct interfaces interfaces[255] = {0};
     int i_count = 0;
     process_junos_gnmi_header(&tc->cont, &tc->hdr);
@@ -300,13 +539,48 @@ int proto_interfaces(struct thread_container *tc)
     return 0;
 }
 
+int proto_optics(struct thread_container *tc)
+{
+    struct optics optics[255] = {0};
+    struct ifdb *db = tc->db;
+    int i_count = 0;
+    char optic_temp[4096];
+    char lane_temp[4096];
+    char lane_output[4096];
+    char lane_receive[4096];
+    process_junos_gnmi_header(&tc->cont, &tc->hdr);
+    recurse_by_msg_num(&tc->cont, tc->recurse_array, 0, tc->recurse_depth);
+    const u_char *end = tc->cont.ptr + tc->cont.remaining_length;
+    while(tc->cont.ptr < end) {
+        process_junos_optics(&tc->cont, &optics[i_count++]);
+    }
+    ifdb_set_tags(tc->db, "interface_optic_data=junos");
+    ifdb_start_measurement(tc->db, tc->hdr.system_id);
+    struct optic_stats *stats;
+    for(int i = 0; i < i_count-1; i++) {
+        snprintf(optic_temp, 4096, "%s_optic_temp", optics[i].name);
+        ifdb_add_double(tc->db, optic_temp, optics[i].stats.module_temp);
+        for(int l = 0; l < optics[i].stats.num_lanes; l++) {
+            stats = &optics[i].stats;
+            snprintf(lane_temp, 4096, "%s_lane_%llu_laser_temp", optics[i].name, stats->lanes[l].lane_number);
+            snprintf(lane_output, 4096, "%s_lane_%llu_output", optics[i].name, stats->lanes[l].lane_number);
+            snprintf(lane_receive, 4096,  "%s_lane_%llu_receive", optics[i].name, stats->lanes[l].lane_number);
+            ifdb_add_double(tc->db, lane_temp, stats->lanes[l].laser_temp);
+            ifdb_add_double(tc->db, lane_output, stats->lanes[l].laser_output_dbm);
+            ifdb_add_double(tc->db, lane_receive, stats->lanes[l].laser_receive_dbm);
+        }
+    }
+    ifdb_end_measurement(tc->db, tc->hdr.timestamp * 1000000);
+    ifdb_push(tc->db);
+    memset(tc->read_buffer, 0, 1024*1024);
+    return 0;
+}
+
 void *proto_listen(void *thread_container)
 {
+    int i_count;
     struct thread_container *tc = thread_container;
     struct ifdb *db = tc->db;
-    int receive_len = 0;
-    char time_buf[80];
-    int i_count = 0;
     if(!db) {
         pthread_exit(NULL);
     }

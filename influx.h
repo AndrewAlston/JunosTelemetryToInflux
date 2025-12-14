@@ -9,6 +9,7 @@
 #include <asm-generic/types.h>
 #include <ctype.h>
 #include <errno.h>
+#include <math.h>
 
 #define BUFFER_SIZE (4096*4096)
 #define REMAINING ({ BUFFER_SIZE - strlen(db->buffer); })

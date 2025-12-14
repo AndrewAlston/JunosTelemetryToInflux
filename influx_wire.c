@@ -73,6 +73,9 @@ void ifdb_add_long(struct ifdb *db, char *name, long long value)
 
 void ifdb_add_double(struct ifdb *db, char *name, double value)
 {
+    if(isnan(value) || isinf(value)) {
+        value = -40;
+    }
     snprintf(&db->buffer[strlen(db->buffer)], REMAINING, "%s=%.3f,", name, value);
 }
 
@@ -124,6 +127,7 @@ void ifdb_push(struct ifdb *db)
         if(code != 204) {
             printf("Failed post, got error return code %d\n", code);
             printf("Attempted to post %s\n", db->buffer);
+            printf("Got return %s\n", db->result);
         }
     }
 cleanup:

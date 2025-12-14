@@ -24,6 +24,8 @@
 struct thread_container;
 typedef int(*callback)(struct thread_container *tc);
 
+
+
 struct container {
     __u64 last_msg; // The encoded last message / message type we received
     const u_char *ptr; // A pointer to the current position of the packet
@@ -79,6 +81,75 @@ struct thread_container {
     unsigned long receive_len;
 };
 
+#define MAX_THREADS 50
+struct threads {
+    pthread_t thread;
+    struct thread_container *tc;
+};
+
+struct thread_group {
+    struct threads th [50];
+    int num_threads;
+};
+
+struct optic_lanes {
+    __u64 lane_number;  // 1
+    double laser_temp; // 2
+    float laser_output_dbm; // 3
+    float laser_receive_dbm; // 4
+    double laser_bias_current; // 5
+    bool laser_output_high_alarm; // 6
+    bool laser_output_low_alarm; // 7
+    bool laser_output_high_warning; // 8
+    bool laser_output_low_warning; // 9
+    bool laser_receive_high_alarm; // 10
+    bool laser_receive_low_alarm; // 11
+    bool laser_receive_high_warning; // 12
+    bool laser_receive_low_warning; // 13
+    bool laser_bias_high_alarm; // 14
+    bool laser_bias_low_alarm; // 15
+    bool laser_bias_high_warning; // 16
+    bool laser_bias_low_warning; // 17
+    bool laser_tx_los_alarm; // 18
+    bool laser_rx_los_alarm; // 19
+    __u64 fec_corrected_bits; // 20
+    __u64 fec_uncorrected_bits; // 21
+
+};
+
+struct optic_stats {
+    __u64 optic_type;
+    double module_temp;
+    double temp_high_alarm_thresh;
+    double temp_low_alarm_thresh;
+    double temp_high_warning_thresh;
+    double temp_low_warning_thresh;
+    double laser_output_high_alarm_thresh;
+    double laser_output_low_alarm_thresh;
+    double laser_output_high_warning_thresh;
+    double laser_output_low_warning_thresh;
+    double laser_rx_high_alarm_thresh;
+    double laser_rx_low_alarm_thresh;
+    double laser_rx_high_warning_thresh;
+    double laser_rx_low_warning_thresh;
+    double laser_bias_high_alarm_thresh;
+    double laser_bias_low_alarm_thresh;
+    double laser_bias_high_warning_thresh;
+    double laser_bias_low_warning_thresh;
+    bool temp_high_alarm;
+    bool temp_low_alarm;
+    bool temp_high_warning;
+    bool temp_low_warning;
+    struct optic_lanes lanes[8]; // Realistically we shouldnt have more than 8 lanes
+    __u8 num_lanes;
+};
+
+struct optics {
+    char name[1024];
+    __u64 snmp_if_index;
+    struct optic_stats stats;
+
+};
 
 void process_junos_gnmi_header(struct container *cont, struct gnmi_header *hdr);
 void dump_gnmi_header(struct gnmi_header *hdr);
@@ -90,4 +161,5 @@ struct thread_container *create_listener(char *addr, __u16 port, callback cb);
 int proto_add_recurse(struct thread_container *listener, __u64 cp);
 int proto_interfaces(struct thread_container *tc);
 void *proto_listen(void *thread_container);
+int proto_optics(struct thread_container *tc);
 #endif //PROTOBUF2_PROTOBUF_H
