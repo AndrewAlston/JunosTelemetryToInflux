@@ -27,7 +27,7 @@ struct thread_container *add_thread(struct thread_group *tg, char *addr, __u16 p
         printf("Failed allocating for thread container\n");
         return NULL;
     }
-    printf("Thread container at %p\n", tg->th[tg->num_threads].tc);
+    printf("Created thread %u, with thread container at %p\n",tg->num_threads, tg->th[tg->num_threads].tc);
     tg->th[tg->num_threads].tc->db = ifdb_new(db_ip, db_port, user, pw, db);
     if(!tg->th[tg->num_threads].tc->db) {
         printf("Failed allocating for new database connection\n");
@@ -35,6 +35,7 @@ struct thread_container *add_thread(struct thread_group *tg, char *addr, __u16 p
         return NULL;
     }
     tg->num_threads++;
+    printf("Returning thread controller at %p\n",tg->th[tg->num_threads-1].tc);
     return tg->th[tg->num_threads-1].tc;
 }
 
@@ -55,6 +56,20 @@ int main() {
         proto_add_recurse(tc, 7);
     }
     tc = add_thread(&tg, NULL, 2302, proto_optics, "127.0.0.1", 8086, NULL, NULL, "interface_data_test");
+    if(!tc) {
+        return EXIT_FAILURE;
+    } else {
+        proto_add_recurse(tc, 2636);
+        proto_add_recurse(tc, 10);
+    }
+    tc = add_thread(&tg, NULL, 2303, proto_interfaces, "127.0.0.1", 8086, NULL, NULL, "interface_data_test");
+    if(!tc) {
+        return EXIT_FAILURE;
+    } else {
+        proto_add_recurse(tc, 2636);
+        proto_add_recurse(tc, 7);
+    }
+    tc = add_thread(&tg, NULL, 2304, proto_optics, "127.0.0.1", 8086, NULL, NULL, "interface_data_test");
     if(!tc) {
         return EXIT_FAILURE;
     } else {

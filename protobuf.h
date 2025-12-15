@@ -49,6 +49,9 @@ struct interfaces {
     struct stats egress;
     char op_state[1024];
     char admin_state[1024];
+    char description[2048];
+    __u64 last_change;
+    __u64 high_speed;
 };
 
 struct gnmi_header {
@@ -65,6 +68,7 @@ struct gnmi_header {
 struct thread_container {
     struct gnmi_header hdr;
     struct sockaddr_in server_addr;
+    struct sockaddr_in client_addr;
     struct container cont;
     struct interfaces interfaces[50];
     char listen_addr[INET_ADDRSTRLEN];
@@ -78,7 +82,7 @@ struct thread_container {
     struct ifdb *db;
     char error[2048];
     u_char read_buffer[1024*1024];
-    unsigned long receive_len;
+    ssize_t receive_len;
 };
 
 #define MAX_THREADS 50

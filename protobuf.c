@@ -174,6 +174,14 @@ void process_junos_gnmi_header(struct container *cont, struct gnmi_header *hdr) 
     }
 }
 
+const u_char *process_interface_family_stats(struct container *cont, struct stats *stat)
+{
+    __u64 length;
+    cont->ptr = get_var_numeric(cont->ptr, &length);
+    cont->ptr+=length;
+    return cont->ptr;
+}
+
 const u_char *process_interface_stats(struct container *cont, struct stats *stat) {
     __u64 length = 0;
     // Get the length of the interface statistics message
@@ -198,6 +206,15 @@ const u_char *process_interface_stats(struct container *cont, struct stats *stat
             case 4:
                 cont->ptr = get_var_numeric(cont->ptr, &stat->if_mcast_packets);
                 cont->remaining_length = real_end-cont->ptr;
+                break;
+            case 5:
+                cont->ptr = process_interface_family_stats(cont, stat);
+                cont->remaining_length = real_end-cont->ptr;
+                break;
+            case 6:
+                cont->ptr = process_interface_family_stats(cont, stat);
+                cont->remaining_length = real_end-cont->ptr;
+                break;
             default:
                 return cont->ptr;
         }
@@ -215,9 +232,11 @@ const u_char *process_junos_interface(struct container *cont, struct interfaces 
     __u64 length = 0;
     while(cont->ptr < end) {
         cont->ptr = get_var_numeric(cont->ptr, &cont->last_msg);
+        fflush(stdout);
         switch(cont->last_msg>>3) {
             case 1:
                 cont->ptr = get_string(cont->ptr, iface->name, 1024);
+                fflush(stdout);
                 cont->remaining_length = end-cont->ptr;
                 break;
             case 2:
@@ -244,8 +263,14 @@ const u_char *process_junos_interface(struct container *cont, struct interfaces 
             case 8:
                 cont->ptr = get_string(cont->ptr, iface->admin_state, 1024);
                 break;
+            case 9:
+                cont->ptr = get_string(cont->ptr, iface->description, 1024);
+                break;
+            case 10:
+                cont->ptr = get_var_numeric(cont->ptr, &iface->last_change);
+                break;
             default:
-                return NULL;
+                return end;
         }
     }
     return cont->ptr;
@@ -470,6 +495,7 @@ struct thread_container *create_listener(char *addr, __u16 port, callback cb)
     fflush(stdout);
     if(addr != NULL) {
         printf("Got address at %p\n", addr);
+        memcpy(tc->listen_addr, addr, strlen(addr));
         fflush(stdout);
         if((inet_pton(AF_INET, addr, &tc->server_addr.sin_addr)) != 1) {
             printf("Invalid server address specified, listening on all addresses\n");
@@ -479,8 +505,10 @@ struct thread_container *create_listener(char *addr, __u16 port, callback cb)
         tc->server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     }
     fflush(stdout);
+    tc->listen_port = port;
     tc->server_addr.sin_port = htons(port);
     tc->server_addr.sin_family = AF_INET;
+    memset((void *)&tc->client_addr, 0, sizeof(tc->client_addr));
     tc->cb = cb;
     return tc;
 }
@@ -517,7 +545,7 @@ int proto_interfaces(struct thread_container *tc)
         tc->shutdown = true;
         return -1;
     }
-    for (int i = 0; i < i_count - 1; i++) {
+    for (int i = 0; i < i_count- 1; i++) {
         if (strlen(interfaces[i].name) < 2048) {
             snprintf(in_if_packets, 4096, "%s:if_packets_ingress", interfaces[i].name);
         }
@@ -548,6 +576,10 @@ int proto_optics(struct thread_container *tc)
     char lane_temp[4096];
     char lane_output[4096];
     char lane_receive[4096];
+    char laser_bias[4096];
+    char laser_temp[4096];
+    char fec_corrected[4096];
+    char fec_uncorrected[4096];
     process_junos_gnmi_header(&tc->cont, &tc->hdr);
     recurse_by_msg_num(&tc->cont, tc->recurse_array, 0, tc->recurse_depth);
     const u_char *end = tc->cont.ptr + tc->cont.remaining_length;
@@ -565,9 +597,17 @@ int proto_optics(struct thread_container *tc)
             snprintf(lane_temp, 4096, "%s_lane_%llu_laser_temp", optics[i].name, stats->lanes[l].lane_number);
             snprintf(lane_output, 4096, "%s_lane_%llu_output", optics[i].name, stats->lanes[l].lane_number);
             snprintf(lane_receive, 4096,  "%s_lane_%llu_receive", optics[i].name, stats->lanes[l].lane_number);
+            snprintf(laser_bias, 4096, "%s_lane_%llu_bias", optics[i].name, stats->lanes[l].lane_number);
+            snprintf(laser_temp, 4096, "%s_lane_%llu_temp", optics[i].name, stats->lanes[l].lane_number);
+            snprintf(fec_corrected, 4096, "%s_lane_%llu_fec_corrected", optics[i].name, stats->lanes[l].lane_number);
+            snprintf(fec_uncorrected, 4096, "%s_lane_%llu_fec_uncorrected", optics[i].name, stats->lanes[l].lane_number);
             ifdb_add_double(tc->db, lane_temp, stats->lanes[l].laser_temp);
             ifdb_add_double(tc->db, lane_output, stats->lanes[l].laser_output_dbm);
             ifdb_add_double(tc->db, lane_receive, stats->lanes[l].laser_receive_dbm);
+            ifdb_add_double(tc->db, laser_bias, stats->lanes[i].laser_bias_current);
+            ifdb_add_double(tc->db, laser_temp, stats->lanes[i].laser_temp);
+            ifdb_add_long(tc->db, fec_corrected, stats->lanes[l].fec_corrected_bits);
+            ifdb_add_long(tc->db, fec_uncorrected, stats->lanes[l].fec_uncorrected_bits);
         }
     }
     ifdb_end_measurement(tc->db, tc->hdr.timestamp * 1000000);
@@ -594,12 +634,18 @@ void *proto_listen(void *thread_container)
         tc->shutdown = true;
         pthread_exit(NULL);
     }
+    socklen_t client_len = sizeof(tc->client_addr);
     while(!tc->shutdown) { // Enter an endless loop reading packets from the UDP stream
         i_count = 0;
-        tc->receive_len = recvfrom(tc->socket, tc->read_buffer, (1024*1024)-1, 0, NULL, 0);
-        fflush(stdout);
+        tc->receive_len = recvfrom(tc->socket, tc->read_buffer, (1024*1024)-1, 0,
+                                   (struct sockaddr *)&tc->client_addr, &client_len);
+        char CLIENT_ADDR[INET_ADDRSTRLEN] = {0};
+        char SERV_ADDR[INET_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET, &tc->client_addr.sin_addr.s_addr, CLIENT_ADDR, INET_ADDRSTRLEN);
+        inet_ntop(AF_INET, &tc->server_addr.sin_addr.s_addr, SERV_ADDR, INET_ADDRSTRLEN);
         if (tc->receive_len < 0) {
-            snprintf(tc->error, 2048, "Failed receiving data from socket\n");
+            printf("%s\n",tc->error);
+            fflush(stdout);
             close(tc->socket);
             tc->shutdown = true;
             pthread_exit(NULL);
